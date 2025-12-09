@@ -277,6 +277,9 @@
 
         // 전체화면 버튼 이벤트
         document.getElementById('fullscreen-btn').addEventListener('click', () => {
+            // 버튼 클릭 시 포커스 해제 (스페이스바 점프 시 버튼 눌림 방지)
+            document.getElementById('fullscreen-btn').blur();
+
             if (!document.fullscreenElement) {
                 document.documentElement.requestFullscreen().catch(err => {
                     console.log(`Error attempting to enable full-screen mode: ${err.message}`);
@@ -290,8 +293,35 @@
 
         // 화면 크기 설정
         function resizeCanvas() {
+            const oldHeight = canvas.height; // 변경 전 높이 저장
+            
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            
+            // 게임 도중(지형 생성 후) 화면 크기가 바뀌면 오브젝트들 위치 보정
+            if (oldHeight && groundSegments.length > 0) {
+                const deltaY = canvas.height - oldHeight; // 높이 변화량
+
+                // 플레이어 위치 보정
+                player.y += deltaY;
+
+                // 지형 보정
+                groundSegments.forEach(seg => {
+                    seg.yStart += deltaY;
+                    seg.yEnd += deltaY;
+                });
+
+                // 장애물/아이템 보정
+                gameObjects.forEach(obj => {
+                    obj.y += deltaY;
+                });
+                
+                // 파티클 보정
+                particles.forEach(p => {
+                    p.y += deltaY;
+                });
+            }
+
             // 바닥의 크기(화면 아래부터의 높이)는 120으로 고정
             baseGroundY = canvas.height - 120;
             minGroundY = canvas.height * 0.4; // 화면 위쪽 40% 지점까지만 올라감
@@ -850,6 +880,11 @@
         }
 
         function handleInput(e) {
+            // 스페이스바 기본 동작(스크롤, 버튼 클릭 등) 방지
+            if (e.code === 'Space') {
+                e.preventDefault();
+            }
+
             if ((e.code === 'Space' || e.type === 'touchstart' || e.type === 'mousedown') && isPlaying) {
                 player.jump();
             }
