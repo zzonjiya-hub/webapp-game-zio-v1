@@ -178,7 +178,7 @@
     <div id="start-screen">
         <h1>스마일<br>지오메트리 대쉬</h1>
         <p style="color: #ddd; margin-bottom: 30px; text-align: center; font-size: 18px;">
-            Lv.3부터 지형이 험난해집니다! ⛰️<br>
+            Lv.2부터 지형이 험난해집니다! ⛰️<br>
             높은 계단은 벽입니다. 부딪히면 게임 오버! ☠️<br>
             2단 점프가 가능합니다!<br>
             [스페이스바] 또는 [터치]로 점프
@@ -261,10 +261,15 @@
         // 게임 상태 변수
         let isPlaying = false;
         let isCheatMode = false; // 치트 모드 플래그
+        let isSuperCheatMode = false; // H키: 벽 자동 점프 포함 슈퍼 모드
         let animationId;
         let frames = 0;
         let score = 0;
-        let highScore = localStorage.getItem('smileDashHiScore') || 0; // 키 이름 변경
+        
+        // 요청 반영: 하이스코어 0으로 초기화
+        localStorage.setItem('smileDashHiScore', 0);
+        let highScore = 0;
+        
         let level = 1;
         let gameSpeed = 10;
         let spawnTimer = 0;
@@ -335,6 +340,7 @@
 
         const CHAR_NORMAL = '😀';
         const CHAR_INVINCIBLE = '🤓';
+        const CHAR_SUPER = '😍';
         const OBSTACLES = ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵'];
         const POWERUPS = ['🍟', '🍔', '🍕', '🥪', '🌭'];
 
@@ -428,14 +434,14 @@
             const width = Math.random() * 300 + 400; // 400~700px 길이
             let endY = startY;
 
-            // Lv.3 부터 지형 변화 시작
-            if (level >= 3) {
+            // Lv.2 부터 지형 변화 시작 (요청 반영)
+            if (level >= 2) {
                 const rand = Math.random();
                 const delta = 100; // 변화 폭
                 
-                // [난이도 조정]: Lv.6 이상이면 평지 확률 대폭 감소 (40% -> 20%)
-                const flatProbability = (level >= 6) ? 0.2 : 0.4;
-                const slopeProbability = (level >= 6) ? 0.4 : 0.3; // 경사 확률 증가
+                // [난이도 조정]: Lv.5 이상이면 평지 확률 대폭 감소 (40% -> 20%) (요청 반영)
+                const flatProbability = (level >= 5) ? 0.2 : 0.4;
+                const slopeProbability = (level >= 5) ? 0.4 : 0.3; // 경사 확률 증가
                 // 나머지 확률은 계단(단차)
 
                 if (rand < flatProbability) {
@@ -457,7 +463,7 @@
                     endY = startY; 
                 }
             } else {
-                // Lv 1~2: 평지 위주
+                // Lv 1: 평지 위주
                 endY = baseGroundY;
                 startY = (groundSegments.length > 0) ? groundSegments[groundSegments.length-1].yEnd : baseGroundY;
             }
@@ -545,10 +551,16 @@
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 
-                // 캐릭터 이모지: 무적이거나 치트모드면 🤓
-                const char = (this.isInvincible || isCheatMode) ? CHAR_INVINCIBLE : CHAR_NORMAL;
+                // 캐릭터 이모지: 슈퍼모드면 😍, 일반무적/치트면 🤓, 평소 😀
+                let char = CHAR_NORMAL;
+                if (isSuperCheatMode) {
+                    char = CHAR_SUPER;
+                } else if (this.isInvincible || isCheatMode) {
+                    char = CHAR_INVINCIBLE;
+                }
                 
-                ctx.fillText(char, 0, this.width * 0.1); 
+                // [수정] y축 오프셋(this.width * 0.1) 제거하여 주인공을 정위치에 그림
+                ctx.fillText(char, 0, 0); 
                 ctx.restore();
             },
 
@@ -568,15 +580,49 @@
                         this.y = groundYUnderPlayer - this.height; // 바닥 위에 안착
                     }
                 } else {
-                    this.dy += this.gravity;
-                    this.grounded = false;
+                    // [수정] 내리막길 보정 (Slope Sticking)
+                    // 이전에 바닥에 있었고(grounded), 점프 중이 아니며(dy >= 0),
+                    // 바닥과의 거리가 가까우면(내리막길) 떨어지는 것이 아니라 바닥에 붙인다.
+                    const distToGround = groundYUnderPlayer - (this.y + this.height);
+                    const slopeThreshold = 30; // 내리막길 허용 범위 (계단처럼 큰 낙차는 제외)
+
+                    if (this.grounded && this.dy >= 0 && distToGround > 0 && distToGround <= slopeThreshold) {
+                         this.y = groundYUnderPlayer - this.height;
+                         this.dy = 0;
+                         this.grounded = true;
+                         this.jumpCount = 0;
+                    } else {
+                        this.dy += this.gravity;
+                        this.grounded = false;
+                    }
                 }
 
-                // 전방 벽 충돌 체크
+                // [슈퍼 모드 자동 점프 개선] 부딪히기 전에 미리 감지하여 점프
+                if (isSuperCheatMode && this.grounded) {
+                    const lookAhead = 60; // 60px 전방 감지
+                    const groundYAhead = getGroundYAt(this.x + this.width + lookAhead);
+                    const wallThreshold = 30;
+                    
+                    // 전방에 벽이 있으면 미리 점프
+                    if (groundYAhead < this.y + this.height - wallThreshold) {
+                        this.dy = this.baseJumpPower;
+                        this.grounded = false;
+                        playSound('jump');
+                    }
+                }
+
+                // 전방 벽 충돌 체크 (기존 충돌 로직)
                 const groundYFront = getGroundYAt(this.x + this.width - 20); 
                 const wallThreshold = 30; 
                 if (groundYFront < this.y + this.height - wallThreshold) {
-                    gameOver();
+                    // [H키 기능 구현] 슈퍼 치트 모드일 경우 벽을 만나면 자동 점프 (안전장치)
+                    if (isSuperCheatMode) {
+                        this.dy = this.baseJumpPower; // 강제 점프
+                        this.grounded = false;
+                        playSound('jump'); // 소리도 재생
+                    } else {
+                        gameOver();
+                    }
                 }
 
                 // 타이머 및 입자 효과
@@ -765,10 +811,12 @@
         }
 
         function updateLevel() {
-            const newLevel = Math.min(10, Math.floor(score / 1000) + 1); 
+            // 제한 없이 레벨 증가 (요청 반영)
+            const newLevel = Math.floor(score / 1000) + 1; 
             if (newLevel > level) {
                 level = newLevel;
-                gameSpeed = 10 + (level - 1) * 2.23;
+                // 속도 증가 (무한히 빨라지면 충돌 버그가 생길 수 있으므로 최대 40으로 안전장치 설정)
+                gameSpeed = Math.min(40, 10 + (level - 1) * 2.0);
             }
             document.getElementById('level-display').innerText = level;
         }
@@ -848,8 +896,10 @@
             document.getElementById('mode-msg').style.opacity = '0';
             document.getElementById('invincible-ui').style.display = 'none';
 
-            if (isCheatMode) {
-                 // 치트 모드 메시지 삭제 요청 반영
+            if (isSuperCheatMode) {
+                 // 메시지 숨김 처리
+                 document.getElementById('mode-msg').style.opacity = '0';
+            } else if (isCheatMode) {
                  document.getElementById('mode-msg').style.opacity = '0';
             } else {
                  document.getElementById('mode-msg').innerText = "무적 모드 발동! 🤓";
@@ -899,10 +949,22 @@
             if ((e.code === 'Space' || e.type === 'touchstart' || e.type === 'mousedown') && isPlaying) {
                 player.jump();
             }
+            
+            // 슈퍼 무적 모드 중 J키 누르면 게임 종료
+            // [수정] 한글 입력 상태에서도 작동하도록 e.key 대신 e.code 사용
+            if (isPlaying && isSuperCheatMode && e.code === 'KeyJ') {
+                gameOver();
+            }
 
             if (!isPlaying && document.getElementById('gameover-screen').classList.contains('hidden')) {
-                if (e.key === 'z' || e.key === 'Z') {
+                // [수정] 한글 입력 상태 호환을 위해 e.code 사용
+                if (e.code === 'KeyZ') {
                     isCheatMode = true; 
+                    isSuperCheatMode = false;
+                    startGame();
+                } else if (e.code === 'KeyH') { 
+                    isCheatMode = true; 
+                    isSuperCheatMode = true;
                     startGame();
                 }
             }
@@ -915,12 +977,14 @@
         document.getElementById('start-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             isCheatMode = false; 
+            isSuperCheatMode = false;
             startGame();
         });
 
         document.getElementById('restart-btn').addEventListener('click', (e) => {
             e.stopPropagation();
             isCheatMode = false; 
+            isSuperCheatMode = false;
             startGame();
         });
 
